@@ -1,0 +1,48 @@
+{
+  "name": "icloud-mail-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read-only iCloud Mail connector for Claude (remote MCP server on Cloudflare Workers)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/run.ts"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261101.0",
+    "hoodiecrow-imap": "^3.3.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.40.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ICLOUD_USER": {
+        "description": "Your iCloud email address, e.g. name@icloud.com."
+      },
+      "ICLOUD_APP_PASSWORD": {
+        "description": "An Apple app-specific password. Make one at account.apple.com: Sign-In and Security, App-Specific Passwords."
+      },
+      "OWNER_PASSWORD": {
+        "description": "A long random password you make up and save (at least 16 characters). You type it once when connecting Claude."
+      },
+      "OAUTH_KV": {
+        "description": "Stores sign-in tokens. Created automatically."
+      },
+      "IMAP_HOST": {
+        "description": "Leave as imap.mail.me.com."
+      },
+      "IMAP_PORT": {
+        "description": "Leave as 993."
+      },
+      "IMAP_TLS": {
+        "description": "Leave as on."
+      }
+    }
+  }
+}

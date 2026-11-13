@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "icloud-mail-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "kv_namespaces": [
+    // No id: Cloudflare creates this namespace automatically on first deploy.
+    { "binding": "OAUTH_KV" }
+  ],
+  "vars": {
+    "IMAP_HOST": "imap.mail.me.com",
+    "IMAP_PORT": "993",
+    "IMAP_TLS": "on"
+  }
+  // Secrets (set with `npx wrangler secret put NAME`, never written here):
+  //   ICLOUD_USER, ICLOUD_APP_PASSWORD, OWNER_PASSWORD
+}
