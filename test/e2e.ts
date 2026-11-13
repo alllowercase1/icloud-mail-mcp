@@ -93,6 +93,12 @@ async function main() {
       body: new URLSearchParams(fields),
     });
 
+  await test("tampered sign-in handle is refused", async () => {
+    const bad = handle.slice(0, -2) + (handle.endsWith("AA") ? "BB" : "AA");
+    const res = await post({ handle: bad, decision: "approve", password: OWNER });
+    assert.equal(res.status, 400);
+  });
+
   await test("wrong owner password is refused", async () => {
     const res = await post({ handle, decision: "approve", password: "nope" });
     assert.equal(res.status, 401);

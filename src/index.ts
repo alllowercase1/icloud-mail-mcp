@@ -28,17 +28,54 @@ export interface Env {
 const SCOPE = "mail:read";
 const DEFAULT_REDIRECTS = ["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"];
 const MAX_FAILED_LOGINS_PER_HOUR = 10;
-const PENDING_TTL_SECONDS = 600;
+const PENDING_TTL_SECONDS = 1800;
 
-function randomHandle(): string {
-  const b = crypto.getRandomValues(new Uint8Array(32));
+const enc = new TextEncoder();
+
+function b64url(bytes: Uint8Array): string {
   let s = "";
-  for (const x of b) s += String.fromCharCode(x);
+  for (const x of bytes) s += String.fromCharCode(x);
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function pendingKey(handle: string): string {
-  return "icloudmcp:pending:" + handle;
+function fromB64url(s: string): Uint8Array {
+  const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+
+async function handleKey(env: Env): Promise<CryptoKey> {
+  const base = await crypto.subtle.importKey("raw", enc.encode(env.OWNER_PASSWORD), "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: enc.encode("icloud-mail-mcp"), info: enc.encode("consent-handle-v1") },
+    base,
+    { name: "HMAC", hash: "SHA-256", length: 256 },
+    false,
+    ["sign", "verify"],
+  );
+}
+
+// The pending authorization request travels in the form itself, signed and time-limited, so
+// signing in needs neither a cookie (Claude's in-app sign-in sheet on iPhone drops it) nor a
+// storage read that could miss right after the write. Approval still needs OWNER_PASSWORD,
+// and the redirect is re-checked against Claude's registered callback when completing.
+async function sealRequest(env: Env, authReq: AuthRequest): Promise<string> {
+  const payload = b64url(enc.encode(JSON.stringify({ r: authReq, e: Math.floor(Date.now() / 1000) + PENDING_TTL_SECONDS })));
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", await handleKey(env), enc.encode(payload)));
+  return `${payload}.${b64url(sig)}`;
+}
+
+async function openRequest(env: Env, handle: string): Promise<AuthRequest | null> {
+  const m = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{43})$/.exec(handle);
+  if (!m || handle.length > 8000) return null;
+  try {
+    const ok = await crypto.subtle.verify("HMAC", await handleKey(env), fromB64url(m[2]), enc.encode(m[1]));
+    if (!ok) return null;
+    const { r, e } = JSON.parse(new TextDecoder().decode(fromB64url(m[1])));
+    if (typeof e !== "number" || e < Date.now() / 1000) return null;
+    return r as AuthRequest;
+  } catch {
+    return null;
+  }
 }
 
 function allowedRedirects(env: Env): string[] {
@@ -133,23 +170,17 @@ async function authorize(request: Request, env: Env): Promise<Response> {
     if (request.method === "GET") {
       const authReq = await oauth.parseAuthRequest(request);
       const details = await oauth.describeConsent(authReq);
-      // The pending request is kept server-side under an unguessable handle. No cookie is used:
-      // Claude's in-app sign-in sheet on iPhone doesn't reliably keep cookies between the page
-      // load and the form post. Approval still needs OWNER_PASSWORD, and codes only go to Claude.
-      const handle = randomHandle();
-      await env.OAUTH_KV.put(pendingKey(handle), JSON.stringify(authReq), { expirationTtl: PENDING_TTL_SECONDS });
+      const handle = await sealRequest(env, authReq);
       return page("Connect iCloud Mail", consentForm(details, handle), 200);
     }
     if (request.method === "POST") {
       const form = await request.formData();
       const handle = String(form.get("handle") || "");
-      const stored = /^[A-Za-z0-9_-]{43}$/.test(handle) ? await env.OAUTH_KV.get(pendingKey(handle)) : null;
-      if (!stored) {
-        return page("Can't connect", "<h1>Can't connect</h1><p>This sign-in expired or was already used.</p><p class=\"muted\">Start again from Claude.</p>", 400);
+      const authReq = await openRequest(env, handle);
+      if (!authReq) {
+        return page("Can't connect", "<h1>Can't connect</h1><p>This sign-in page expired.</p><p class=\"muted\">Start again from Claude.</p>", 400);
       }
-      const authReq = JSON.parse(stored) as AuthRequest;
       if (form.get("decision") !== "approve") {
-        await env.OAUTH_KV.delete(pendingKey(handle));
         const back = new URL(authReq.redirectUri);
         back.searchParams.set("error", "access_denied");
         if (authReq.state) back.searchParams.set("state", authReq.state);
@@ -163,7 +194,6 @@ async function authorize(request: Request, env: Env): Promise<Response> {
         await env.OAUTH_KV.put(throttleKey(), String(failures + 1), { expirationTtl: 7200 });
         return page("Connect iCloud Mail", consentForm(null, handle, "Wrong password. Try again."), 401);
       }
-      await env.OAUTH_KV.delete(pendingKey(handle)); // one use only
       const { redirectTo } = await oauth.completeAuthorization({
         request: authReq,
         userId: "owner",
