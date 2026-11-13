@@ -6,6 +6,7 @@ import {
   AuthorizationError,
   CimdFetchError,
   OAuthProvider,
+  type AuthRequest,
   type ConsentDescription,
   type OAuthHelpers,
 } from "@cloudflare/workers-oauth-provider";
@@ -27,6 +28,18 @@ export interface Env {
 const SCOPE = "mail:read";
 const DEFAULT_REDIRECTS = ["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"];
 const MAX_FAILED_LOGINS_PER_HOUR = 10;
+const PENDING_TTL_SECONDS = 600;
+
+function randomHandle(): string {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  let s = "";
+  for (const x of b) s += String.fromCharCode(x);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function pendingKey(handle: string): string {
+  return "icloudmcp:pending:" + handle;
+}
 
 function allowedRedirects(env: Env): string[] {
   const custom = (env.ALLOWED_REDIRECT_URIS || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -120,15 +133,27 @@ async function authorize(request: Request, env: Env): Promise<Response> {
     if (request.method === "GET") {
       const authReq = await oauth.parseAuthRequest(request);
       const details = await oauth.describeConsent(authReq);
-      const consent = await oauth.beginConsent(authReq);
-      return page("Connect iCloud Mail", consentForm(details, consent.handle), 200, consent.headers);
+      // The pending request is kept server-side under an unguessable handle. No cookie is used:
+      // Claude's in-app sign-in sheet on iPhone doesn't reliably keep cookies between the page
+      // load and the form post. Approval still needs OWNER_PASSWORD, and codes only go to Claude.
+      const handle = randomHandle();
+      await env.OAUTH_KV.put(pendingKey(handle), JSON.stringify(authReq), { expirationTtl: PENDING_TTL_SECONDS });
+      return page("Connect iCloud Mail", consentForm(details, handle), 200);
     }
     if (request.method === "POST") {
       const form = await request.formData();
       const handle = String(form.get("handle") || "");
+      const stored = /^[A-Za-z0-9_-]{43}$/.test(handle) ? await env.OAUTH_KV.get(pendingKey(handle)) : null;
+      if (!stored) {
+        return page("Can't connect", "<h1>Can't connect</h1><p>This sign-in expired or was already used.</p><p class=\"muted\">Start again from Claude.</p>", 400);
+      }
+      const authReq = JSON.parse(stored) as AuthRequest;
       if (form.get("decision") !== "approve") {
-        const denied = await oauth.denyConsent(request, handle);
-        return new Response(null, { status: 302, headers: denied.headers });
+        await env.OAUTH_KV.delete(pendingKey(handle));
+        const back = new URL(authReq.redirectUri);
+        back.searchParams.set("error", "access_denied");
+        if (authReq.state) back.searchParams.set("state", authReq.state);
+        return Response.redirect(back.toString(), 302);
       }
       const failures = parseInt((await env.OAUTH_KV.get(throttleKey())) || "0", 10);
       if (failures >= MAX_FAILED_LOGINS_PER_HOUR) {
@@ -138,16 +163,15 @@ async function authorize(request: Request, env: Env): Promise<Response> {
         await env.OAUTH_KV.put(throttleKey(), String(failures + 1), { expirationTtl: 7200 });
         return page("Connect iCloud Mail", consentForm(null, handle, "Wrong password. Try again."), 401);
       }
-      const approved = await oauth.approveConsent(request, handle, { scope: [SCOPE] });
+      await env.OAUTH_KV.delete(pendingKey(handle)); // one use only
       const { redirectTo } = await oauth.completeAuthorization({
-        request: approved.request,
+        request: authReq,
         userId: "owner",
         metadata: {},
         scope: [SCOPE],
         props: { owner: true },
       });
-      approved.headers.set("Location", redirectTo);
-      return new Response(null, { status: 302, headers: approved.headers });
+      return new Response(null, { status: 302, headers: { Location: redirectTo, "Cache-Control": "no-store" } });
     }
     return new Response("Method Not Allowed", { status: 405 });
   } catch (error) {

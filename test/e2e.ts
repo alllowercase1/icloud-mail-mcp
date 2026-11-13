@@ -89,7 +89,7 @@ async function main() {
     fetch(`${BASE}/authorize`, {
       method: "POST",
       redirect: "manual",
-      headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies, origin: BASE },
+      headers: { "content-type": "application/x-www-form-urlencoded", origin: BASE }, // no cookie: iPhone sign-in sheets may drop it
       body: new URLSearchParams(fields),
     });
 
