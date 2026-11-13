@@ -83,6 +83,16 @@ function allowedRedirects(env: Env): string[] {
   return custom.length ? custom : DEFAULT_REDIRECTS;
 }
 
+/** Defense in depth: never send the browser anywhere except an allowed Claude callback. */
+function isAllowedRedirect(env: Env, target: string): boolean {
+  try {
+    const u = new URL(target);
+    return u.protocol === "https:" && allowedRedirects(env).includes(u.origin + u.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function mailConfig(env: Env): MailConfig {
   return {
     user: (env.ICLOUD_USER || "").trim(),
@@ -183,6 +193,9 @@ async function authorize(request: Request, env: Env): Promise<Response> {
       if (!authReq) {
         return page("Can't connect", "<h1>Can't connect</h1><p>This sign-in page expired.</p><p class=\"muted\">Start again from Claude.</p>", 400);
       }
+      if (!isAllowedRedirect(env, authReq.redirectUri)) {
+        return page("Can't connect", "<h1>Can't connect</h1><p>This request isn't from Claude.</p>", 400);
+      }
       if (form.get("decision") !== "approve") {
         const back = new URL(authReq.redirectUri);
         back.searchParams.set("error", "access_denied");
@@ -204,6 +217,9 @@ async function authorize(request: Request, env: Env): Promise<Response> {
         scope: [SCOPE],
         props: { owner: true },
       });
+      if (!isAllowedRedirect(env, redirectTo)) {
+        return page("Can't connect", "<h1>Can't connect</h1><p>This request isn't from Claude.</p>", 400);
+      }
       return new Response(null, { status: 302, headers: { Location: redirectTo, "Cache-Control": "no-store" } });
     }
     return new Response("Method Not Allowed", { status: 405 });
