@@ -114,7 +114,10 @@ function page(title: string, body: string, status = 200, headers?: Headers): Res
   const h = headers ?? new Headers();
   h.set("Content-Type", "text/html; charset=utf-8");
   h.set("X-Frame-Options", "DENY");
-  h.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'");
+  // No form-action directive: browsers apply it to every redirect after the form posts, and the
+  // hop to Claude's callback (and whatever Claude's app does next) would be blocked silently.
+  // The only form here posts to this page, and nothing user-supplied is rendered unescaped.
+  h.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
   h.set("Referrer-Policy", "no-referrer");
   h.set("Cache-Control", "no-store");
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

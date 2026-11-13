@@ -81,6 +81,7 @@ async function main() {
     const html = await res.text();
     assert.match(html, /type="password"/);
     assert.match(html, /claude\.ai/);
+    assert.doesNotMatch(res.headers.get("content-security-policy") || "", /form-action/, "form-action would block the redirect to Claude");
     handle = /name="handle" value="([^"]+)"/.exec(html)![1];
     cookies = cookiesFrom(res);
   });
