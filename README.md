@@ -1,9 +1,9 @@
-# iCloud Mail connector for Claude
+# iCloud Mail, Calendar & Contacts connector for Claude
 
-A small server that lets Claude **read** your iCloud Mail, any time, without your Mac being on.
-It runs for free on Cloudflare Workers and talks to iCloud over IMAP.
+A small server that lets Claude **read** your iCloud Mail, Calendar and Contacts, any time, without your Mac being on.
+It runs for free on Cloudflare Workers and talks to iCloud over IMAP, CalDAV and CardDAV, all with the same app-specific password.
 
-- **Read-only.** Three tools: list mailboxes, search messages, read a message (headers, text, attachment names). It cannot send, delete, move, flag or mark mail as read: mailboxes are opened read-only and bodies are fetched with `BODY.PEEK`.
+- **Read-only.** Seven tools: list mailboxes, search and read mail; list calendars and events; search and read contacts. It cannot send, delete, move, flag or mark mail as read (mailboxes are opened read-only and bodies are fetched with `BODY.PEEK`), and it only ever sends CalDAV/CardDAV read requests (`PROPFIND`, `REPORT`, `GET`), so it can't create, change or delete events or contacts. Your Apple ID and app password are only sent to iCloud.
 - **Always on.** Cloudflare runs it; nothing depends on your computer.
 - **Free.** Cloudflare Workers free plan (100,000 requests a day; this uses a handful per question).
 
@@ -99,11 +99,16 @@ Try it: "Search my iCloud mail for anything from Chris this week."
 | `list_mailboxes` | Folders (INBOX, Sent Messages, Archive, Junk, custom), optionally with total/unread counts. |
 | `search_messages` | Newest-first search in one mailbox by from, to, subject, text, date range, unread, flagged. Returns headers and a `uid`. |
 | `get_message` | One message by mailbox + uid: headers, plain-text body (HTML converted), attachment names and sizes. Doesn't mark it read. |
+| `list_calendars` | Your iCloud calendars (name, id, color). Reminders-only lists are left out. |
+| `list_events` | Events overlapping a date range (default the next 7 days, up to 400), soonest first, in the IANA time zone you ask for. Recurring events are expanded; filter by calendar or text. |
+| `search_contacts` | Contacts matching a name, nickname, company, email or phone number (any format). Returns names, companies, emails, phones and an `id`. |
+| `get_contact` | One contact by id: emails, phones, addresses, birthday, websites, related names and notes. |
 
 ## Troubleshooting
 
-- **"iCloud rejected the sign-in"**: the app-specific password is wrong or revoked, or try `ICLOUD_USER` without `@icloud.com`. Re-run `npx wrangler secret put …` to change a value.
+- **"iCloud rejected the sign-in"**: the app-specific password is wrong or revoked: make a fresh one, and set `ICLOUD_USER` to your main Apple ID address (not an alias). Re-run `npx wrangler secret put …` to change a value.
 - **"Too many wrong passwords"**: wait up to an hour, then connect again.
+- **New tools don't show up in Claude after an update**: open the connector in Claude's settings and reconnect it, or start a new chat.
 - **Claude says the connector needs reconnecting**: click Connect again and type the connector password.
 - **Change the connector password**: `npx wrangler secret put OWNER_PASSWORD`. (Existing connections stay signed in; revoke the app-specific password to cut everything off.)
 
@@ -111,15 +116,16 @@ Try it: "Search my iCloud mail for anything from Chris this week."
 
 ```
 npm run typecheck   # TypeScript
-npm test            # 16 tool tests against Hoodiecrow, a strict test IMAP server
+npm test            # 16 mail tests against Hoodiecrow (a strict test IMAP server) + 12 calendar/contacts tests against a mock CalDAV/CardDAV server
 ```
-End-to-end (OAuth flow + MCP over Workers sockets, no real account):
+End-to-end (OAuth flow + MCP over Workers sockets and fetch, no real account):
 ```
-printf 'ICLOUD_USER=testuser\nICLOUD_APP_PASSWORD=testpass\nOWNER_PASSWORD=correct-horse-battery-staple-42\nIMAP_HOST=127.0.0.1\nIMAP_PORT=1143\nIMAP_TLS=off\n' > .dev.vars
+printf 'ICLOUD_USER=testuser\nICLOUD_APP_PASSWORD=testpass\nOWNER_PASSWORD=correct-horse-battery-staple-42\nIMAP_HOST=127.0.0.1\nIMAP_PORT=1143\nIMAP_TLS=off\nCALDAV_URL=http://127.0.0.1:8790/\nCARDDAV_URL=http://127.0.0.1:8790/card-root/\n' > .dev.vars
 node test/imap-server.cjs &   # test IMAP server on :1143
+DAV_SERVE_PORT=8790 DAV_USER=testuser DAV_PASS=testpass npx tsx test/dav.ts &   # mock CalDAV/CardDAV
 npx wrangler dev --port 8787 &
 npx tsx test/e2e.ts
 ```
 `.dev.vars` is for local testing only and is git-ignored; never put real credentials there.
 
-Layout: `src/imap.ts` (minimal IMAP client over Web Streams), `src/mime.ts` (BODYSTRUCTURE, decoding, HTML→text), `src/mail.ts` (tools), `src/mcp.ts` (stateless Streamable HTTP MCP), `src/index.ts` (OAuth via `@cloudflare/workers-oauth-provider`, sign-in page, routing).
+Layout: `src/imap.ts` (minimal IMAP client over Web Streams), `src/mime.ts` (BODYSTRUCTURE, decoding, HTML→text), `src/mail.ts` (mail tools), `src/dav.ts` (calendar and contacts tools over CalDAV/CardDAV), `src/mcp.ts` (stateless Streamable HTTP MCP), `src/index.ts` (OAuth via `@cloudflare/workers-oauth-provider`, sign-in page, routing).

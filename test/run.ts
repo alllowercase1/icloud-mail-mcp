@@ -239,7 +239,7 @@ async function main() {
 
   // MCP JSON-RPC layer
   const rpc = async (body: unknown) => {
-    const res = await handleMcp(new Request("https://x/mcp", { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } }), cfg());
+    const res = await handleMcp(new Request("https://x/mcp", { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } }), cfg(), { user: "", password: "", caldavUrl: "https://caldav.icloud.com/", carddavUrl: "https://contacts.icloud.com/" });
     return { status: res.status, body: res.status === 202 ? null : ((await res.json()) as any) };
   };
 
@@ -250,7 +250,7 @@ async function main() {
     const note = await rpc({ jsonrpc: "2.0", method: "notifications/initialized" });
     assert.equal(note.status, 202);
     const list = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    assert.deepEqual(list.body.result.tools.map((t: any) => t.name), ["list_mailboxes", "search_messages", "get_message"]);
+    assert.deepEqual(list.body.result.tools.map((t: any) => t.name), ["list_mailboxes", "search_messages", "get_message", "list_calendars", "list_events", "search_contacts", "get_contact"]);
     assert.ok(list.body.result.tools.every((t: any) => t.annotations.readOnlyHint === true));
     const call = await rpc({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "search_messages", arguments: { subject: "budget" } } });
     assert.ok(!call.body.result.isError);

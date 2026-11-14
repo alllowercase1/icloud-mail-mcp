@@ -12,6 +12,7 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { handleMcp } from "./mcp";
 import type { MailConfig } from "./mail";
+import type { DavConfig } from "./dav";
 
 export interface Env {
   OAUTH_KV: KVNamespace;
@@ -22,6 +23,8 @@ export interface Env {
   IMAP_HOST?: string;
   IMAP_PORT?: string;
   IMAP_TLS?: string; // "on" (default) or "off" for local testing only
+  CALDAV_URL?: string; // defaults to https://caldav.icloud.com/
+  CARDDAV_URL?: string; // defaults to https://contacts.icloud.com/
   ALLOWED_REDIRECT_URIS?: string; // comma-separated; defaults to Claude's callbacks
 }
 
@@ -108,11 +111,20 @@ function mailConfig(env: Env): MailConfig {
   };
 }
 
+function davConfig(env: Env): DavConfig {
+  return {
+    user: (env.ICLOUD_USER || "").trim(),
+    password: (env.ICLOUD_APP_PASSWORD || "").trim(),
+    caldavUrl: env.CALDAV_URL || "https://caldav.icloud.com/",
+    carddavUrl: env.CARDDAV_URL || "https://contacts.icloud.com/",
+  };
+}
+
 // ---------- MCP endpoint (only reached with a valid access token) ----------
 
 const mcpHandler = {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return handleMcp(request, mailConfig(env));
+    return handleMcp(request, mailConfig(env), davConfig(env));
   },
 };
 

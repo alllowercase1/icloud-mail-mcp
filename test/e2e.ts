@@ -144,7 +144,7 @@ async function main() {
     const init = (await (await mcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "e2e", version: "1" } } })).json()) as any;
     assert.equal(init.result.serverInfo.name, "icloud-mail");
     const list = (await (await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json()) as any;
-    assert.equal(list.result.tools.length, 3);
+    assert.equal(list.result.tools.length, 7);
   });
 
   await test("tools/call reaches IMAP through Workers sockets", async () => {
@@ -154,6 +154,22 @@ async function main() {
     assert.equal(data.messages[0].subject, "Tour budget");
     const msg = (await (await mcp({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "get_message", arguments: { uid: data.messages[0].uid } } })).json()) as any;
     assert.match(JSON.parse(msg.result.content[0].text).body, /Budget attached tomorrow/);
+  });
+
+  await test("Calendar and Contacts tools reach CalDAV/CardDAV through Workers fetch", async () => {
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const res = (await (await mcp({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } })).json()) as any;
+      assert.ok(!res.result.isError, res.result.content[0].text);
+      return JSON.parse(res.result.content[0].text);
+    };
+    const cals = await call("list_calendars", {});
+    assert.deepEqual(cals.calendars.map((c: any) => c.name), ["Home", "Work & Tour"]);
+    const ev = await call("list_events", { start: "2026-11-16", end: "2026-11-23", timezone: "America/New_York" });
+    assert.equal(ev.events[1].start, "2026-11-18T11:00:00-05:00");
+    const people = await call("search_contacts", { query: "917 555 0142" });
+    assert.equal(people.contacts[0].name, "Chris Example");
+    const card = await call("get_contact", { id: people.contacts[0].id });
+    assert.equal(card.birthday, "1990-04-02");
   });
 
   await test("refresh token works", async () => {
